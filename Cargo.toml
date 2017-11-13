@@ -27,3 +27,10 @@ router = "0.5.1"
 iron = "0.5.1"
 bodyparser = "0.7.0"
 params = "0.6.0"
+
+[dev-dependencies]
+exonum-testkit = { git = "https://github.com/alekseysidorov/exonum-testkit", branch = "remove-node-handler" }
+pretty_assertions = "0.4.0"
+
+[patch.crates-io]
+exonum = { git = "https://github.com/alekseysidorov/exonum", branch = "improve-blockchain-api" }
