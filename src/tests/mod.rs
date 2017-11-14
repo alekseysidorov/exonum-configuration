@@ -4,7 +4,7 @@ use exonum_testkit::{TestKit, TestKitBuilder, TestNode};
 use exonum::blockchain::{Schema, StoredConfiguration, Transaction};
 use exonum::helpers::{Height, ValidatorId};
 use exonum::storage::StorageValue;
-use exonum::crypto::{hash, Hash};
+use exonum::crypto::{hash, Hash, HASH_SIZE};
 
 use {ConfigurationSchema, ConfigurationService, TxConfigPropose, TxConfigVote};
 
@@ -47,14 +47,11 @@ impl ConfigurationTestKit for TestKit {
     fn apply_configuration(&mut self, proposer: ValidatorId, cfg_proposal: StoredConfiguration) {
         let cfg_change_height = cfg_proposal.actual_from;
         // Push cfg change propose.
-        let txs =
-            txvec![
-            new_tx_config_propose(
-                &self.network().validators()[proposer.0 as usize],
-                cfg_proposal.clone()
-            ),
-        ];
-        self.create_block_with_transactions(txs);
+        let tx_propose = new_tx_config_propose(
+            &self.network().validators()[proposer.0 as usize],
+            cfg_proposal.clone(),
+        );
+        self.create_block_with_transactions(txvec![tx_propose]);
         // Push votes
         let cfg_proposal_hash = cfg_proposal.hash();
         let tx_votes = self.network()
@@ -278,7 +275,7 @@ fn test_discard_invalid_config_json() {
     let mut testkit: TestKit = TestKit::default();
 
     let cfg_bytes = [70; 74];
-    str::from_utf8(&cfg_bytes).unwrap(); // invalid json bytes
+    let new_cfg = str::from_utf8(&cfg_bytes).unwrap(); // invalid json bytes
 
     let propose_tx = {
         let keypair = testkit.network().validators()[1].service_keypair();
@@ -288,415 +285,274 @@ fn test_discard_invalid_config_json() {
     assert_eq!(None, testkit.find_propose(hash(new_cfg.as_bytes())));
 }
 
-// #[test]
-// fn test_discard_invalid_config_json() {
-//     let (sandbox, sandbox_state, _) = configuration_sandbox();
-//     sandbox.assert_state(Height(1), Round::first());
-//     let cfg_bytes = [70; 74];
-//     let new_cfg = str::from_utf8(&cfg_bytes).unwrap(); // invalid json bytes
-//     {
-//         let propose_tx = TxConfigPropose::new(
-//             &sandbox.service_public_key(ValidatorId(1)),
-//             new_cfg,
-//             sandbox.service_secret_key(ValidatorId(1)),
-//         );
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &[propose_tx.raw().clone()]);
-//         sandbox.assert_state(Height(2), Round::first());
-//         assert_eq!(None, get_propose(&sandbox, hash(new_cfg.as_bytes())));
-//     }
-// }
+#[test]
+fn test_config_txs_discarded_when_following_config_present() {
+    let mut testkit: TestKit = TestKit::default();
 
-// #[test]
-// fn test_config_txs_discarded_when_following_config_present() {
-//     let (sandbox, sandbox_state, initial_cfg) = configuration_sandbox();
-//     sandbox.assert_state(Height(1), Round::first());
+    let first_cfg = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(Height(5));
+        cfg.set_service_config("dummy", "First cfg change");
+        cfg.stored_configuration().clone()
+    };
 
-//     let following_config = generate_config_with_message(
-//         initial_cfg.hash(),
-//         Height(6),
-//         "Following cfg at height 6",
-//         &sandbox,
-//     );
+    let tx_propose = new_tx_config_propose(&testkit.network().validators()[1], first_cfg.clone());
+    testkit.create_block_with_transactions(txvec![tx_propose]);
 
-//     {
-//         let propose_tx = TxConfigPropose::new(
-//             &sandbox.service_public_key(ValidatorId(1)),
-//             str::from_utf8(following_config.clone().into_bytes().as_slice())
-//                 .unwrap(),
-//             sandbox.service_secret_key(ValidatorId(1)),
-//         );
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &[propose_tx.raw().clone()]);
-//         sandbox.assert_state(Height(2), Round::first());
-//         assert_eq!(
-//             Some(propose_tx),
-//             get_propose(&sandbox, following_config.hash())
-//         );
-//     }
-//     {
-//         let votes = (0..3)
-//             .map(|validator| {
-//                 let validator = ValidatorId(validator);
-//                 TxConfigVote::new(
-//                     &sandbox.service_public_key(validator),
-//                     &following_config.hash(),
-//                     sandbox.service_secret_key(validator),
-//                 ).raw()
-//                     .clone()
-//             })
-//             .collect::<Vec<_>>();
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &votes);
-//         sandbox.assert_state(Height(3), Round::first());
-//         assert_eq!(sandbox.cfg(), initial_cfg);
-//         assert_eq!(sandbox.following_cfg(), Some(following_config.clone()));
-//     }
-//     let new_cfg =
-//         generate_config_with_message(initial_cfg.hash(), Height(7), "New cfg", &sandbox);
+    let cfg_proposal_hash = first_cfg.hash();
+    let tx_votes = testkit
+        .network()
+        .validators()
+        .iter()
+        .map(|validator| new_tx_config_vote(validator, cfg_proposal_hash))
+        .map(to_boxed)
+        .collect::<Vec<_>>();
+    testkit.create_block_with_transactions(tx_votes);
 
-//     {
-//         let propose_tx_new = TxConfigPropose::new(
-//             &sandbox.service_public_key(ValidatorId(1)),
-//             str::from_utf8(new_cfg.clone().into_bytes().as_slice()).unwrap(),
-//             sandbox.service_secret_key(ValidatorId(1)),
-//         );
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[propose_tx_new.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(4), Round::first());
+    let second_cfg = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(Height(15));
+        cfg.set_service_config("dummy", "Second cfg change");
+        cfg.stored_configuration().clone()
+    };
+    let tx_propose = new_tx_config_propose(&testkit.network().validators()[0], second_cfg.clone());
+    testkit.create_block_with_transactions(txvec![tx_propose]);
+    assert!(testkit.find_propose(second_cfg.hash()).is_none());
+    assert!(testkit.find_propose(first_cfg.hash()).is_some());
+}
 
-//         assert_eq!(None, get_propose(&sandbox, new_cfg.hash()));
-//     }
-//     let vote_validator_0 = TxConfigVote::new(
-//         &sandbox.service_public_key(ValidatorId::zero()),
-//         &following_config.hash(),
-//         sandbox.service_secret_key(ValidatorId::zero()),
-//     );
-//     let vote_validator_3 = TxConfigVote::new(
-//         &sandbox.service_public_key(ValidatorId(3)),
-//         &following_config.hash(),
-//         sandbox.service_secret_key(ValidatorId(3)),
-//     );
-//     {
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[vote_validator_3.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(5), Round::first());
+#[test]
+fn test_config_txs_discarded_when_not_referencing_actual_config_or_sent_by_illegal_validator() {
+    let mut testkit: TestKit = TestKit::default();
+    let initial_cfg = Schema::new(&testkit.snapshot()).actual_configuration();
 
-//         let votes = get_votes_for_propose(&sandbox, following_config.hash());
-//         assert!(votes.contains(&Some(vote_validator_0)));
-//         assert!(!votes.contains(&Some(vote_validator_3)));
-//         assert_eq!(initial_cfg, sandbox.cfg());
-//     }
-//     {
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &[]);
-//         sandbox.assert_state(Height(6), Round::first());
-//         assert_eq!(following_config, sandbox.cfg());
-//     }
-// }
+    let new_cfg_bad_previous_cfg = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(Height(6));
+        let mut stored = cfg.stored_configuration().clone();
+        stored.previous_cfg_hash = Hash::new([11; HASH_SIZE]);
+        stored
+    };
+    let new_cfg = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(Height(6));
+        cfg.set_service_config("dummy", "Following cfg");
+        cfg.stored_configuration().clone()
+    };
+    let discarded_votes_cfg = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(Height(8));
+        cfg.set_service_config("dummy", "Following cfg");
+        cfg.stored_configuration().clone()
+    };
 
-// #[test]
-// fn test_config_txs_discarded_when_not_referencing_actual_config_or_sent_by_illegal_validator() {
-//     let (sandbox, sandbox_state, initial_cfg) = configuration_sandbox();
-//     sandbox.assert_state(Height(1), Round::first());
+    {
+        let illegal_node = TestNode::new_validator(ValidatorId(0));
+        let illegal_propose1 = new_tx_config_propose(
+            &testkit.network().validators()[1],
+            new_cfg_bad_previous_cfg.clone(),
+        );
+        let illegal_propose2 = new_tx_config_propose(&illegal_node, new_cfg.clone());
+        testkit.create_block_with_transactions(txvec![illegal_propose1, illegal_propose2]);
+        assert!(
+            testkit
+                .find_propose(new_cfg_bad_previous_cfg.hash())
+                .is_none()
+        );
+        assert!(testkit.find_propose(new_cfg.hash()).is_none());
+    }
+    {
+        let legal_propose1 =
+            new_tx_config_propose(&testkit.network().validators()[1], new_cfg.clone());
+        let legal_propose2 = new_tx_config_propose(
+            &testkit.network().validators()[1],
+            discarded_votes_cfg.clone(),
+        );
+        testkit.create_block_with_transactions(txvec![legal_propose1, legal_propose2]);
+        assert!(testkit.find_propose(discarded_votes_cfg.hash()).is_some());
+        assert!(testkit.find_propose(new_cfg.hash()).is_some());
+    }
+    {
+        let illegal_node = TestNode::new_auditor();
+        let illegal_validator_vote = new_tx_config_vote(&illegal_node, discarded_votes_cfg.hash());
+        testkit.create_block_with_transactions(txvec![illegal_validator_vote.clone()]);
+        assert!(!testkit
+            .votes_for_propose(discarded_votes_cfg.hash())
+            .contains(&Some(illegal_validator_vote)))
+    }
+    {
+        let votes = (0..3)
+            .map(|id| {
+                new_tx_config_vote(&testkit.network().validators()[id], new_cfg.hash())
+            })
+            .map(to_boxed)
+            .collect::<Vec<_>>();
+        testkit.create_block_with_transactions(votes);
+        assert_eq!(
+            initial_cfg,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+        assert_eq!(
+            Some(new_cfg.clone()),
+            Schema::new(&testkit.snapshot()).following_configuration()
+        );
+    }
+    {
+        testkit.create_block();
+        assert_eq!(
+            new_cfg,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+        assert!(
+            Schema::new(&testkit.snapshot())
+                .following_configuration()
+                .is_none()
+        );
+    }
+    {
+        let expected_votes = (0..3)
+            .map(|id| {
+                new_tx_config_vote(
+                    &testkit.network().validators()[id],
+                    discarded_votes_cfg.hash(),
+                )
+            })
+            .collect::<Vec<_>>();
+        testkit.create_block_with_transactions(
+            expected_votes.clone().into_iter().map(to_boxed).collect(),
+        );
 
-//     let new_cfg_bad_previous_cfg = generate_config_with_message(
-//         Hash::new([11; HASH_SIZE]),
-//         Height(6),
-//         "Following cfg at height 6",
-//         &sandbox,
-//     );
-//     // not actual config hash
+        let actual_votes = testkit.votes_for_propose(discarded_votes_cfg.hash());
+        for expected_vote in expected_votes {
+            assert!(!actual_votes.contains(&Some(expected_vote)));
+        }
+    }
+}
 
-//     let new_cfg = generate_config_with_message(
-//         initial_cfg.hash(),
-//         Height(6),
-//         "Following cfg at height 6",
-//         &sandbox,
-//     );
-//     let discarded_votes_cfg = generate_config_with_message(
-//         initial_cfg.hash(),
-//         Height(8),
-//         "discarded votes",
-//         &sandbox,
-//     );
+/// regression: votes' were summed for all proposes simultaneously, and not for the same propose
+#[test]
+fn test_regression_majority_votes_for_different_proposes() {
+    let mut testkit: TestKit = TestKit::default();
+    let initial_cfg = Schema::new(&testkit.snapshot()).actual_configuration();
 
-//     let (illegal_pub, illegal_sec) = gen_keypair_from_seed(&Seed::new([66; 32]));
+    let actual_from = Height(5);
+    let new_cfg1 = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(actual_from);
+        cfg.set_service_config("dummy", "First cfg");
+        cfg.stored_configuration().clone()
+    };
+    let new_cfg2 = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(actual_from);
+        cfg.set_service_config("dummy", "Second cfg");
+        cfg.stored_configuration().clone()
+    };
+    {
+        let proposes = [new_cfg1.clone(), new_cfg2.clone()]
+            .into_iter()
+            .map(|cfg| {
+                let validator = &testkit.network().validators()[1];
+                new_tx_config_propose(&validator, cfg.clone())
+            })
+            .map(to_boxed)
+            .collect::<Vec<_>>();
+        testkit.create_block_with_transactions(proposes);
+    }
+    {
+        let votes = (0..2)
+            .map(|validator| {
+                let validator = &testkit.network().validators()[validator];
+                new_tx_config_vote(validator, new_cfg1.hash())
+            })
+            .map(to_boxed)
+            .collect::<Vec<_>>();
+        testkit.create_block_with_transactions(votes);
+        assert_eq!(
+            initial_cfg,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+    }
+    {
+        let prop2_validator2 =
+            new_tx_config_vote(&testkit.network().validators()[2], new_cfg2.hash());
+        testkit.create_block_with_transactions(txvec![prop2_validator2]);
+        assert_eq!(
+            initial_cfg,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+    }
+    {
+        let prop1_validator2 =
+            new_tx_config_vote(&testkit.network().validators()[2], new_cfg1.hash());
+        testkit.create_block_with_transactions(txvec![prop1_validator2]);
+        assert_eq!(
+            new_cfg1,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+    }
+}
 
-//     {
-//         let illegal_propose1 = TxConfigPropose::new(
-//             &sandbox.service_public_key(ValidatorId(1)),
-//             str::from_utf8(
-//                 new_cfg_bad_previous_cfg.clone().into_bytes().as_slice(),
-//             ).unwrap(),
-//             sandbox.service_secret_key(ValidatorId(1)),
-//         );
-//         let illegal_propose2 = TxConfigPropose::new(
-//             &illegal_pub,
-//             // not a member of actual config
-//             str::from_utf8(new_cfg.clone().into_bytes().as_slice()).unwrap(),
-//             &illegal_sec,
-//         );
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[
-//                 illegal_propose1.raw().clone(),
-//                 illegal_propose2.raw().clone(),
-//             ],
-//         );
-//         sandbox.assert_state(Height(2), Round::first());
-//         assert_eq!(None, get_propose(&sandbox, new_cfg_bad_previous_cfg.hash()));
-//         assert_eq!(None, get_propose(&sandbox, new_cfg.hash()));
-//     }
-//     {
-//         let legal_propose1 = TxConfigPropose::new(
-//             &sandbox.service_public_key(ValidatorId(1)),
-//             str::from_utf8(new_cfg.clone().into_bytes().as_slice()).unwrap(),
-//             sandbox.service_secret_key(ValidatorId(1)),
-//         );
-//         let legal_propose2 =
-//             TxConfigPropose::new(
-//                 &sandbox.service_public_key(ValidatorId(1)),
-//                 str::from_utf8(discarded_votes_cfg.clone().into_bytes().as_slice()).unwrap(),
-//                 sandbox.service_secret_key(ValidatorId(1)),
-//             );
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[legal_propose1.raw().clone(), legal_propose2.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(3), Round::first());
-//         assert_eq!(Some(legal_propose1), get_propose(&sandbox, new_cfg.hash()));
-//         assert_eq!(
-//             Some(legal_propose2),
-//             get_propose(&sandbox, discarded_votes_cfg.hash())
-//         );
-//     }
-//     {
-//         let illegal_validator_vote =
-//             TxConfigVote::new(&illegal_pub, &discarded_votes_cfg.hash(), &illegal_sec);
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[illegal_validator_vote.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(4), Round::first());
-//         let votes = get_votes_for_propose(&sandbox, discarded_votes_cfg.hash());
-//         assert!(!votes.contains(&Some(illegal_validator_vote)));
-//     }
-//     {
-//         let votes = (0..3)
-//             .map(|validator| {
-//                 let validator = ValidatorId(validator);
-//                 TxConfigVote::new(
-//                     &sandbox.service_public_key(validator),
-//                     &new_cfg.hash(),
-//                     sandbox.service_secret_key(validator),
-//                 ).raw()
-//                     .clone()
-//             })
-//             .collect::<Vec<_>>();
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &votes);
-//         sandbox.assert_state(Height(5), Round::first());
-//         assert_eq!(initial_cfg, sandbox.cfg());
-//         assert_eq!(Some(new_cfg.clone()), sandbox.following_cfg());
-//     }
-//     {
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &[]);
-//         sandbox.assert_state(Height(6), Round::first());
-//         assert_eq!(new_cfg, sandbox.cfg());
-//         assert_eq!(None, sandbox.following_cfg());
-//     }
-//     {
-//         let expected_votes = (0..3)
-//             .map(|validator| {
-//                 let validator = ValidatorId(validator);
-//                 TxConfigVote::new(
-//                     &sandbox.service_public_key(validator),
-//                     &discarded_votes_cfg.hash(),
-//                     sandbox.service_secret_key(validator),
-//                 ).raw()
-//                     .clone()
-//             })
-//             .collect::<Vec<_>>();
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &expected_votes);
-//         sandbox.assert_state(Height(7), Round::first());
-//         let actual_votes = get_votes_for_propose(&sandbox, discarded_votes_cfg.hash());
-//         for raw_vote in expected_votes {
-//             let exp_vote = TxConfigVote::from_raw(raw_vote).unwrap();
-//             assert!(!actual_votes.contains(&Some(exp_vote)));
-//         }
-//     }
-// }
+#[test]
+fn test_regression_new_vote_for_older_config_applies_old_config() {
+    let mut testkit: TestKit = TestKit::default();
 
-// /// regression: votes' were summed for all proposes simultaneously, and not for the same propose
-// #[test]
-// fn test_regression_majority_votes_for_different_proposes() {
-//     let (sandbox, sandbox_state, initial_cfg) = configuration_sandbox();
-//     sandbox.assert_state(Height(1), Round::first());
-
-//     let actual_from = Height(5);
-
-//     let new_cfg1 =
-//         generate_config_with_message(initial_cfg.hash(), actual_from, "First cfg", &sandbox);
-//     let new_cfg2 =
-//         generate_config_with_message(initial_cfg.hash(), actual_from, "Second cfg", &sandbox);
-//     {
-//         let mut proposes = Vec::new();
-//         for cfg in &[new_cfg1.clone(), new_cfg2.clone()] {
-//             proposes.push(
-//                 TxConfigPropose::new(
-//                     &sandbox.service_public_key(ValidatorId(1)),
-//                     str::from_utf8(cfg.clone().into_bytes().as_slice()).unwrap(),
-//                     sandbox.service_secret_key(ValidatorId(1)),
-//                 ).raw()
-//                     .clone(),
-//             );
-//         }
-
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &proposes);
-//         sandbox.assert_state(Height(2), Round::first());
-//     }
-//     {
-//         let mut votes = Vec::new();
-//         for validator in 0..2 {
-//             let validator = ValidatorId(validator);
-//             votes.push(
-//                 TxConfigVote::new(
-//                     &sandbox.service_public_key(validator),
-//                     &new_cfg1.hash(),
-//                     sandbox.service_secret_key(validator),
-//                 ).raw()
-//                     .clone(),
-//             );
-//         }
-
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &votes);
-//         sandbox.assert_state(Height(3), Round::first());
-//         assert_eq!(initial_cfg, sandbox.cfg());
-//     }
-//     {
-//         let validator_2 = ValidatorId(2);
-//         let prop2_validator2 = TxConfigVote::new(
-//             &sandbox.service_public_key(validator_2),
-//             &new_cfg2.hash(),
-//             sandbox.service_secret_key(validator_2),
-//         );
-
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[prop2_validator2.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(4), Round::first());
-//         assert_eq!(initial_cfg, sandbox.cfg());
-//     }
-//     {
-//         let validator_2 = ValidatorId(2);
-//         let prop1_validator2 = TxConfigVote::new(
-//             &sandbox.service_public_key(validator_2),
-//             &new_cfg1.hash(),
-//             sandbox.service_secret_key(validator_2),
-//         );
-
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[prop1_validator2.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(5), Round::first());
-//         assert_eq!(new_cfg1, sandbox.cfg());
-//     }
-// }
-
-// #[test]
-// fn test_regression_new_vote_for_older_config_applies_old_config() {
-//     let (sandbox, sandbox_state, initial_cfg) = configuration_sandbox();
-//     sandbox.assert_state(Height(1), Round::first());
-
-//     let new_cfg1 =
-//         generate_config_with_message(initial_cfg.hash(), Height(3), "First cfg", &sandbox);
-//     let new_cfg2 =
-//         generate_config_with_message(new_cfg1.hash(), Height(5), "Second cfg", &sandbox);
-
-//     {
-//         let propose_tx1 = TxConfigPropose::new(
-//             &sandbox.service_public_key(ValidatorId(1)),
-//             str::from_utf8(new_cfg1.clone().into_bytes().as_slice()).unwrap(),
-//             sandbox.service_secret_key(ValidatorId(1)),
-//         );
-
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[propose_tx1.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(2), Round::first());
-//     }
-//     {
-//         let mut votes_for_new_cfg1 = Vec::new();
-//         for validator in 0..3 {
-//             let validator = ValidatorId(validator);
-//             votes_for_new_cfg1.push(
-//                 TxConfigVote::new(
-//                     &sandbox.service_public_key(validator),
-//                     &new_cfg1.hash(),
-//                     sandbox.service_secret_key(validator),
-//                 ).raw()
-//                     .clone(),
-//             );
-//         }
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &votes_for_new_cfg1);
-//         sandbox.assert_state(Height(3), Round::first());
-//         assert_eq!(new_cfg1, sandbox.cfg());
-//     }
-//     {
-//         let propose_tx2 = TxConfigPropose::new(
-//             &sandbox.service_public_key(ValidatorId(1)),
-//             str::from_utf8(new_cfg2.clone().into_bytes().as_slice()).unwrap(),
-//             sandbox.service_secret_key(ValidatorId(1)),
-//         );
-
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[propose_tx2.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(4), Round::first());
-//     }
-//     {
-//         let mut votes_for_new_cfg2 = Vec::new();
-//         for validator in 0..3 {
-//             let validator = ValidatorId(validator);
-//             votes_for_new_cfg2.push(
-//                 TxConfigVote::new(
-//                     &sandbox.service_public_key(validator),
-//                     &new_cfg2.hash(),
-//                     sandbox.service_secret_key(validator),
-//                 ).raw()
-//                     .clone(),
-//             );
-//         }
-//         add_one_height_with_transactions(&sandbox, &sandbox_state, &votes_for_new_cfg2);
-//         sandbox.assert_state(Height(5), Round::first());
-//         assert_eq!(new_cfg2, sandbox.cfg());
-//     }
-//     {
-//         let validator_3 = ValidatorId(3);
-//         let prop1_validator3 = TxConfigVote::new(
-//             &sandbox.service_public_key(validator_3),
-//             &new_cfg1.hash(),
-//             sandbox.service_secret_key(validator_3),
-//         );
-//         add_one_height_with_transactions(
-//             &sandbox,
-//             &sandbox_state,
-//             &[prop1_validator3.raw().clone()],
-//         );
-//         sandbox.assert_state(Height(6), Round::first());
-//         assert_eq!(new_cfg2, sandbox.cfg());
-//     }
-// }
+    let new_cfg1 = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(Height(3));
+        cfg.set_service_config("dummy", "First cfg");
+        cfg.stored_configuration().clone()
+    };
+    let new_cfg2 = {
+        let mut cfg = testkit.actual_configuration();
+        cfg.set_actual_from(Height(5));
+        cfg.set_service_config("dummy", "Second cfg");
+        let mut stored = cfg.stored_configuration().clone();
+        stored.previous_cfg_hash = new_cfg1.hash();
+        stored
+    };
+    {
+        let propose_tx1 =
+            new_tx_config_propose(&testkit.network().validators()[1], new_cfg1.clone());
+        testkit.create_block_with_transactions(txvec![propose_tx1]);
+        let votes = (0..3)
+            .map(|validator| {
+                let validator = &testkit.network().validators()[validator];
+                new_tx_config_vote(validator, new_cfg1.hash())
+            })
+            .map(to_boxed)
+            .collect::<Vec<_>>();
+        testkit.create_block_with_transactions(votes);
+        assert_eq!(
+            new_cfg1,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+    }
+    {
+        let propose_tx2 =
+            new_tx_config_propose(&testkit.network().validators()[1], new_cfg2.clone());
+        testkit.create_block_with_transactions(txvec![propose_tx2]);
+        let votes = (0..3)
+            .map(|validator| {
+                let validator = &testkit.network().validators()[validator];
+                new_tx_config_vote(validator, new_cfg2.hash())
+            })
+            .map(to_boxed)
+            .collect::<Vec<_>>();
+        testkit.create_block_with_transactions(votes);
+        assert_eq!(Height(5), testkit.height());
+        assert_eq!(
+            new_cfg2,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+    }
+    {
+        let prop1_validator3 =
+            new_tx_config_propose(&testkit.network().validators()[3], new_cfg1.clone());
+        testkit.create_block_with_transactions(txvec![prop1_validator3]);
+        assert_eq!(
+            new_cfg2,
+            Schema::new(&testkit.snapshot()).actual_configuration()
+        );
+    }
+}
