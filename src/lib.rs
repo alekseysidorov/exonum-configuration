@@ -86,6 +86,7 @@
 #[macro_use]
 extern crate exonum;
 #[cfg(test)]
+#[macro_use]
 extern crate exonum_testkit;
 #[cfg(test)]
 #[macro_use]
