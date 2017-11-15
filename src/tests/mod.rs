@@ -1,18 +1,23 @@
 use std::str;
 
-use exonum_testkit::{TestKit, TestKitBuilder, TestNode};
 use exonum::blockchain::{Schema, StoredConfiguration, Transaction};
 use exonum::helpers::{Height, ValidatorId};
 use exonum::storage::StorageValue;
 use exonum::crypto::{hash, Hash, HASH_SIZE};
+use exonum_testkit::{TestKit, TestKitBuilder, TestNode};
 
 use {ConfigurationSchema, ConfigurationService, TxConfigPropose, TxConfigVote};
 
-fn to_boxed<T: Transaction>(tx: T) -> Box<Transaction> {
+mod config_api;
+
+pub fn to_boxed<T: Transaction>(tx: T) -> Box<Transaction> {
     Box::new(tx) as Box<Transaction>
 }
 
-fn new_tx_config_propose(node: &TestNode, cfg_proposal: StoredConfiguration) -> TxConfigPropose {
+pub fn new_tx_config_propose(
+    node: &TestNode,
+    cfg_proposal: StoredConfiguration,
+) -> TxConfigPropose {
     let keypair = node.service_keypair();
     TxConfigPropose::new(
         keypair.0,
@@ -21,13 +26,13 @@ fn new_tx_config_propose(node: &TestNode, cfg_proposal: StoredConfiguration) -> 
     )
 }
 
-fn new_tx_config_vote(node: &TestNode, cfg_proposal_hash: Hash) -> TxConfigVote {
+pub fn new_tx_config_vote(node: &TestNode, cfg_proposal_hash: Hash) -> TxConfigVote {
     let keypair = node.service_keypair();
     TxConfigVote::new(keypair.0, &cfg_proposal_hash, keypair.1)
 }
 
-trait ConfigurationTestKit {
-    fn default() -> Self;
+pub trait ConfigurationTestKit {
+    fn configuration_default() -> Self;
 
     fn apply_configuration(&mut self, proposer: ValidatorId, cfg_proposal: StoredConfiguration);
 
@@ -37,7 +42,7 @@ trait ConfigurationTestKit {
 }
 
 impl ConfigurationTestKit for TestKit {
-    fn default() -> Self {
+    fn configuration_default() -> Self {
         TestKitBuilder::validator()
             .with_validators(4)
             .with_service(ConfigurationService::new())
@@ -92,7 +97,7 @@ fn test_full_node_to_validator() {
 
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         let mut validators = cfg.validators().to_vec();
         validators.push(testkit.network().us().clone());
         cfg.set_actual_from(cfg_change_height);
@@ -111,7 +116,7 @@ fn test_add_validators_to_config() {
 
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         let mut validators = cfg.validators().to_vec();
         validators.push(TestNode::new_validator(ValidatorId(3)));
         cfg.set_actual_from(cfg_change_height);
@@ -130,7 +135,7 @@ fn test_exclude_sandbox_node_from_config() {
 
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         let mut validators = cfg.validators().to_vec();
         validators.pop();
         cfg.set_actual_from(cfg_change_height);
@@ -149,7 +154,7 @@ fn test_apply_second_configuration() {
     // First configuration.
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         let mut validators = cfg.validators().to_vec();
         validators.push(TestNode::new_validator(ValidatorId(3)));
         cfg.set_actual_from(cfg_change_height);
@@ -160,7 +165,7 @@ fn test_apply_second_configuration() {
     // Second configuration.
     let cfg_change_height = Height(10);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         let mut validators = cfg.validators().to_vec();
         validators.pop();
         cfg.set_actual_from(cfg_change_height);
@@ -172,11 +177,11 @@ fn test_apply_second_configuration() {
 
 #[test]
 fn test_discard_propose_for_same_cfg() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
 
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(cfg_change_height);
         cfg.set_service_config("dummy", "First cfg change");
         cfg.stored_configuration().clone()
@@ -194,17 +199,17 @@ fn test_discard_propose_for_same_cfg() {
 
 #[test]
 fn test_discard_vote_for_absent_propose() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
 
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_service_config("dummy", "First cfg");
         cfg.set_actual_from(cfg_change_height);
         cfg.stored_configuration().clone()
     };
     let absent_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_service_config("dummy", "Absent propose");
         cfg.set_actual_from(cfg_change_height);
         cfg.stored_configuration().clone()
@@ -224,12 +229,12 @@ fn test_discard_vote_for_absent_propose() {
 
 #[test]
 fn test_discard_proposes_with_expired_actual_from() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
 
     testkit.create_blocks_until(Height(10));
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_service_config("dummy", "First cfg");
         cfg.set_actual_from(cfg_change_height);
         cfg.stored_configuration().clone()
@@ -242,11 +247,11 @@ fn test_discard_proposes_with_expired_actual_from() {
 
 #[test]
 fn test_discard_votes_with_expired_actual_from() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
 
     let cfg_change_height = Height(5);
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_service_config("dummy", "First cfg");
         cfg.set_actual_from(cfg_change_height);
         cfg.stored_configuration().clone()
@@ -272,7 +277,7 @@ fn test_discard_votes_with_expired_actual_from() {
 
 #[test]
 fn test_discard_invalid_config_json() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
 
     let cfg_bytes = [70; 74];
     let new_cfg = str::from_utf8(&cfg_bytes).unwrap(); // invalid json bytes
@@ -287,10 +292,10 @@ fn test_discard_invalid_config_json() {
 
 #[test]
 fn test_config_txs_discarded_when_following_config_present() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
 
     let first_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(Height(5));
         cfg.set_service_config("dummy", "First cfg change");
         cfg.stored_configuration().clone()
@@ -310,7 +315,7 @@ fn test_config_txs_discarded_when_following_config_present() {
     testkit.create_block_with_transactions(tx_votes);
 
     let second_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(Height(15));
         cfg.set_service_config("dummy", "Second cfg change");
         cfg.stored_configuration().clone()
@@ -323,24 +328,24 @@ fn test_config_txs_discarded_when_following_config_present() {
 
 #[test]
 fn test_config_txs_discarded_when_not_referencing_actual_config_or_sent_by_illegal_validator() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
     let initial_cfg = Schema::new(&testkit.snapshot()).actual_configuration();
 
     let new_cfg_bad_previous_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(Height(6));
         let mut stored = cfg.stored_configuration().clone();
         stored.previous_cfg_hash = Hash::new([11; HASH_SIZE]);
         stored
     };
     let new_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(Height(6));
         cfg.set_service_config("dummy", "Following cfg");
         cfg.stored_configuration().clone()
     };
     let discarded_votes_cfg = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(Height(8));
         cfg.set_service_config("dummy", "Following cfg");
         cfg.stored_configuration().clone()
@@ -432,18 +437,18 @@ fn test_config_txs_discarded_when_not_referencing_actual_config_or_sent_by_illeg
 /// regression: votes' were summed for all proposes simultaneously, and not for the same propose
 #[test]
 fn test_regression_majority_votes_for_different_proposes() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
     let initial_cfg = Schema::new(&testkit.snapshot()).actual_configuration();
 
     let actual_from = Height(5);
     let new_cfg1 = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(actual_from);
         cfg.set_service_config("dummy", "First cfg");
         cfg.stored_configuration().clone()
     };
     let new_cfg2 = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(actual_from);
         cfg.set_service_config("dummy", "Second cfg");
         cfg.stored_configuration().clone()
@@ -495,16 +500,16 @@ fn test_regression_majority_votes_for_different_proposes() {
 
 #[test]
 fn test_regression_new_vote_for_older_config_applies_old_config() {
-    let mut testkit: TestKit = TestKit::default();
+    let mut testkit: TestKit = TestKit::configuration_default();
 
     let new_cfg1 = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(Height(3));
         cfg.set_service_config("dummy", "First cfg");
         cfg.stored_configuration().clone()
     };
     let new_cfg2 = {
-        let mut cfg = testkit.actual_configuration();
+        let mut cfg = testkit.configuration_change_proposal();
         cfg.set_actual_from(Height(5));
         cfg.set_service_config("dummy", "Second cfg");
         let mut stored = cfg.stored_configuration().clone();
