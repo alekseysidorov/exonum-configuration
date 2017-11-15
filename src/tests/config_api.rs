@@ -7,7 +7,7 @@ use exonum::crypto::{hash, Hash, HASH_SIZE};
 use exonum_testkit::{ApiKind, TestKit, TestKitApi, TestKitBuilder, TestNode};
 
 use {ConfigurationSchema, ConfigurationService, TxConfigPropose, TxConfigVote};
-use config_api::{ApiResponseConfigHashInfo, ApiResponseConfigInfo, ApiResponseProposeHashInfo};
+use config_api::{ApiResponseConfigHashInfo, ApiResponseConfigInfo, ApiResponseProposeHashInfo, ApiResponseProposePost};
 use super::{new_tx_config_propose, ConfigurationTestKit};
 
 trait ConfigurationApiTest {
@@ -28,6 +28,8 @@ trait ConfigurationApiTest {
         previous_cfg_hash_filter: Option<Hash>,
         actual_from_filter: Option<Height>,
     ) -> Vec<ApiResponseConfigHashInfo>;
+
+    fn post_config_propose(&self, cfg: &StoredConfiguration) -> ApiResponseProposePost;
 }
 
 fn params_to_query(
@@ -92,6 +94,10 @@ impl ConfigurationApiTest for TestKitApi {
                 &params_to_query(previous_cfg_hash_filter, actual_from_filter),
             ),
         )
+    }
+
+    fn post_config_propose(&self, cfg: &StoredConfiguration) -> ApiResponseProposePost {
+        self.post_private(ApiKind::Service("configuration"), "/v1/configs/postpropose", cfg)
     }
 }
 
@@ -332,4 +338,23 @@ fn test_get_all_committed() {
         vec![expected_response_2.clone()],
         api.get_all_committed(Some(initial_cfg.hash()), None)
     );
+}
+
+#[test]
+fn test_post_propose_tx() {
+    let mut testkit: TestKit = TestKit::configuration_default();
+    let api = testkit.api();
+    // Commits the following configuration.
+    let new_cfg = {
+        let mut cfg = testkit.configuration_change_proposal();
+        cfg.set_actual_from(Height(10));
+        cfg.set_service_config("message", "First config change");
+        cfg.stored_configuration().clone()
+    };
+    let info = api.post_config_propose(&new_cfg);
+    testkit.poll_events();
+    // Check results
+    let tx = new_tx_config_propose(&testkit.network().validators()[0], new_cfg.clone());
+    assert_eq!(tx.hash(), info.tx_hash);
+    assert!(testkit.mempool().contains_key(&info.tx_hash));
 }
