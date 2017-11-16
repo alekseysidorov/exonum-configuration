@@ -545,7 +545,7 @@ fn test_regression_new_vote_for_older_config_applies_old_config() {
             .map(to_boxed)
             .collect::<Vec<_>>();
         testkit.create_block_with_transactions(votes);
-        assert_eq!(Height(5), testkit.height());
+        assert_eq!(Height(5), testkit.current_height());
         assert_eq!(
             new_cfg2,
             Schema::new(&testkit.snapshot()).actual_configuration()
