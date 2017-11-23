@@ -424,7 +424,7 @@ fn test_config_txs_discarded_when_not_referencing_actual_config_or_sent_by_illeg
             })
             .collect::<Vec<_>>();
         testkit.create_block_with_transactions(
-            expected_votes.clone().into_iter().map(to_boxed).collect(),
+            expected_votes.clone().into_iter().map(to_boxed),
         );
 
         let actual_votes = testkit.votes_for_propose(discarded_votes_cfg.hash());
@@ -545,7 +545,7 @@ fn test_regression_new_vote_for_older_config_applies_old_config() {
             .map(to_boxed)
             .collect::<Vec<_>>();
         testkit.create_block_with_transactions(votes);
-        assert_eq!(Height(5), testkit.current_height());
+        assert_eq!(Height(4), testkit.height());
         assert_eq!(
             new_cfg2,
             Schema::new(&testkit.snapshot()).actual_configuration()
