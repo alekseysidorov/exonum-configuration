@@ -423,9 +423,7 @@ fn test_config_txs_discarded_when_not_referencing_actual_config_or_sent_by_illeg
                 )
             })
             .collect::<Vec<_>>();
-        testkit.create_block_with_transactions(
-            expected_votes.clone().into_iter().map(to_boxed),
-        );
+        testkit.create_block_with_transactions(expected_votes.clone().into_iter().map(to_boxed));
 
         let actual_votes = testkit.votes_for_propose(discarded_votes_cfg.hash());
         for expected_vote in expected_votes {

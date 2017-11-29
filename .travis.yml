@@ -18,9 +18,9 @@ sudo: false
 
 env:
   global:
-  - CLIPPY_VERS=0.0.166
+  - CLIPPY_VERS=0.0.169
   - RUSTFMT_VERS=0.9.0
-  - DEADLINKS_VERS=0.2.1
+  - DEADLINKS_VERS=0.3.0
   - ROCKSDB_LIB_DIR=/usr/lib/x86_64-linux-gnu
   - SNAPPY_LIB_DIR=/usr/lib/x86_64-linux-gnu
 
@@ -58,19 +58,19 @@ script: skip
 
 jobs:
   include:
-  - stage: lint
+  - stage: test
     env:
     - FEATURE=non-fatal-checks
     script:
     - cargo doc --no-deps && cargo deadlinks --dir target/doc || true
-  - stage: lint
+  - stage: test
     env:
     - FEATURE=fmt
     script:
     - cargo audit
     - cargo fmt -- --write-mode=diff
-  - stage: lint
-    rust: nightly-2017-10-19
+  - stage: test
+    rust: nightly-2017-11-05
     env:
     - FEATURE=clippy
     script:

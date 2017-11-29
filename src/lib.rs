@@ -397,13 +397,13 @@ impl<'a> ConfigurationSchema<&'a mut Fork> {
         true
     }
 
-    pub fn put_vote(&mut self, tx_vote: TxConfigVote) -> bool {
+    pub fn put_vote(&mut self, tx_vote: &TxConfigVote) -> bool {
         let cfg_hash = tx_vote.cfg_hash();
         let mut propose_data_by_config_hash = self.propose_data_by_config_hash()
             .get(cfg_hash)
             .expect(&format!(
                 "Corresponding propose unexpectedly not found for TxConfigVote:{:?}",
-                &tx_vote
+                tx_vote
             ));
 
         let tx_propose = propose_data_by_config_hash.tx_propose();
@@ -416,7 +416,7 @@ impl<'a> ConfigurationSchema<&'a mut Fork> {
             .expect(&format!(
                 "Previous cfg:{:?} unexpectedly not found for TxConfigVote:{:?}",
                 prev_cfg_hash,
-                &tx_vote
+                tx_vote
             ));
         //expect above depends on restriction during propose execute()
         //    let actual_config: StoredConfiguration = Schema::new(&fork).actual_configuration();
@@ -430,7 +430,7 @@ impl<'a> ConfigurationSchema<&'a mut Fork> {
             .expect(&format!(
                 "See !prev_cfg.validators.contains(self.from()) for \
                               TxConfigVote:{:?}",
-                &tx_vote
+                tx_vote
             ));
         //expect above depends on restrictions both during propose and vote execute()
         //    if !actual_config.validators.contains(self.from()) {
@@ -519,7 +519,7 @@ impl Transaction for TxConfigPropose {
             return;
         }
 
-        let current_height = Schema::new(&fork).current_height();
+        let current_height = Schema::new(&fork).height().next();
         let actual_from = config_candidate_body.actual_from;
         if actual_from <= current_height {
             error!(
@@ -599,7 +599,7 @@ impl Transaction for TxConfigVote {
             return;
         }
 
-        let current_height = Schema::new(&fork).current_height();
+        let current_height = Schema::new(&fork).height().next();
         let actual_from = parsed_config.actual_from;
         if actual_from <= current_height {
             error!(
@@ -613,7 +613,7 @@ impl Transaction for TxConfigVote {
         }
 
         let mut configuration_schema = ConfigurationSchema::new(fork);
-        let result = configuration_schema.put_vote(self.clone());
+        let result = configuration_schema.put_vote(self);
         if !result {
             return;
         }
